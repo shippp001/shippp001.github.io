@@ -91,3 +91,52 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Nexora backend running on port ${PORT}`);
 });
+// ---------- Support Messages (Admin) ----------
+// GET all support messages (admin only)
+app.get('/api/admin/support', async (req, res) => {
+  const { data, error } = await supabaseAdmin
+    .from('support_messages')
+    .select('*')
+    .order('created_at', { ascending: false });
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
+
+// POST a new support message (from contact form)
+app.post('/api/support', async (req, res) => {
+  const { name, email, message } = req.body;
+  const { data, error } = await supabasePublic
+    .from('support_messages')
+    .insert([{ name, email, message }])
+    .select();
+
+  if (error) return res.status(400).json({ error: error.message });
+  res.status(201).json(data[0]);
+});
+
+// PUT reply to a support message (admin)
+app.put('/api/admin/support/:id', async (req, res) => {
+  const { id } = req.params;
+  const { reply } = req.body;
+  const { data, error } = await supabaseAdmin
+    .from('support_messages')
+    .update({ reply, read: true })
+    .eq('id', id)
+    .select();
+
+  if (error) return res.status(400).json({ error: error.message });
+  res.json(data[0]);
+});
+
+// DELETE a support message (admin)
+app.delete('/api/admin/support/:id', async (req, res) => {
+  const { id } = req.params;
+  const { error } = await supabaseAdmin
+    .from('support_messages')
+    .delete()
+    .eq('id', id);
+
+  if (error) return res.status(400).json({ error: error.message });
+  res.json({ success: true });
+});
