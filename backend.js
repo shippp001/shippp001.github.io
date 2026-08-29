@@ -4,7 +4,15 @@ const { createClient } = require('@supabase/supabase-js');
 require('dotenv').config();
 
 const app = express();
-app.use(cors());
+
+// ============================================================
+// MIDDLEWARE
+// ============================================================
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
 
 // ============================================================
@@ -13,6 +21,11 @@ app.use(express.json());
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+console.log('🔍 Checking environment variables:');
+console.log('SUPABASE_URL:', supabaseUrl ? '✅ Set' : '❌ Missing');
+console.log('SUPABASE_ANON_KEY:', supabaseAnonKey ? '✅ Set' : '❌ Missing');
+console.log('SUPABASE_SERVICE_ROLE_KEY:', supabaseServiceKey ? '✅ Set' : '❌ Missing');
 
 if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceKey) {
   console.error('❌ Missing Supabase environment variables!');
@@ -26,13 +39,30 @@ const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 console.log('✅ Supabase connected');
 
 // ============================================================
+// ROOT ROUTE
+// ============================================================
+app.get('/', (req, res) => {
+  res.json({
+    name: 'Nexora Shipping API',
+    status: 'running',
+    endpoints: {
+      health: '/api/health',
+      shipments: '/api/shipments/:trackingId',
+      admin: '/api/admin/shipments',
+      support: '/api/support'
+    }
+  });
+});
+
+// ============================================================
 // HEALTH CHECK
 // ============================================================
 app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'healthy', 
+  res.json({
+    status: 'healthy',
     message: 'Nexora Shipping API is running',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    supabase: supabaseUrl ? 'connected' : 'disconnected'
   });
 });
 
@@ -45,6 +75,8 @@ app.get('/api/shipments/:trackingId', async (req, res) => {
   try {
     const { trackingId } = req.params;
     
+    console.log('🔍 Fetching shipment:', trackingId);
+    
     if (!trackingId) {
       return res.status(400).json({ error: 'Tracking ID is required' });
     }
@@ -56,17 +88,18 @@ app.get('/api/shipments/:trackingId', async (req, res) => {
       .single();
 
     if (error) {
+      console.error('Supabase error:', error);
       if (error.code === 'PGRST116') {
         return res.status(404).json({ error: 'Shipment not found' });
       }
-      console.error('Supabase error:', error);
-      return res.status(500).json({ error: 'Database error' });
+      return res.status(500).json({ error: error.message });
     }
 
     if (!data) {
       return res.status(404).json({ error: 'Shipment not found' });
     }
 
+    console.log('✅ Shipment found:', data.tracking_id);
     res.json(data);
   } catch (err) {
     console.error('Server error:', err);
@@ -79,17 +112,10 @@ app.post('/api/support', async (req, res) => {
   try {
     const { name, email, message } = req.body;
     
-    // Validate required fields
+    console.log('📩 New support message from:', name);
+    
     if (!name || !email || !message) {
-      return res.status(400).json({ 
-        error: 'Name, email, and message are required' 
-      });
-    }
-
-    // Validate email format
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return res.status(400).json({ error: 'Invalid email address' });
+      return res.status(400).json({ error: 'Name, email, and message are required' });
     }
 
     const { data, error } = await supabasePublic
@@ -98,16 +124,16 @@ app.post('/api/support', async (req, res) => {
         name: name.trim(), 
         email: email.trim(), 
         message: message.trim(),
-        read: false,
-        created_at: new Date().toISOString()
+        read: false
       }])
       .select();
 
     if (error) {
       console.error('Supabase insert error:', error);
-      return res.status(500).json({ error: 'Failed to save message' });
+      return res.status(500).json({ error: error.message });
     }
 
+    console.log('✅ Support message saved');
     res.status(201).json({ 
       success: true, 
       message: 'Your message has been sent!',
@@ -120,14 +146,14 @@ app.post('/api/support', async (req, res) => {
 });
 
 // ============================================================
-// ADMIN ROUTES (require service role key)
+// ADMIN ROUTES
 // ============================================================
 
-// ---------- SHIPMENT MANAGEMENT ----------
-
-// GET all shipments
+// GET all shipments (admin)
 app.get('/api/admin/shipments', async (req, res) => {
   try {
+    console.log('📦 Fetching all shipments (admin)');
+    
     const { data, error } = await supabaseAdmin
       .from('shipments')
       .select('*')
@@ -135,9 +161,10 @@ app.get('/api/admin/shipments', async (req, res) => {
 
     if (error) {
       console.error('Supabase error:', error);
-      return res.status(500).json({ error: 'Failed to fetch shipments' });
+      return res.status(500).json({ error: error.message });
     }
 
+    console.log('✅ Shipments loaded:', data ? data.length : 0);
     res.json(data || []);
   } catch (err) {
     console.error('Server error:', err);
@@ -145,12 +172,13 @@ app.get('/api/admin/shipments', async (req, res) => {
   }
 });
 
-// CREATE a new shipment
+// CREATE a new shipment (admin)
 app.post('/api/admin/shipments', async (req, res) => {
   try {
     const shipment = req.body;
     
-    // Validate required fields
+    console.log('📦 Creating shipment:', shipment.tracking_id);
+    
     if (!shipment.tracking_id) {
       return res.status(400).json({ error: 'Tracking ID is required' });
     }
@@ -170,7 +198,6 @@ app.post('/api/admin/shipments', async (req, res) => {
       return res.status(409).json({ error: 'Tracking ID already exists' });
     }
 
-    // Prepare the shipment data with defaults
     const shipmentData = {
       tracking_id: shipment.tracking_id,
       origin: shipment.origin || '—',
@@ -188,8 +215,7 @@ app.post('/api/admin/shipments', async (req, res) => {
       update_date: shipment.update_date || new Date().toLocaleDateString(),
       update_time: shipment.update_time || new Date().toLocaleTimeString(),
       timeline: shipment.timeline || [],
-      packages_info: shipment.packages_info || [],
-      created_at: new Date().toISOString()
+      packages_info: shipment.packages_info || []
     };
 
     const { data, error } = await supabaseAdmin
@@ -202,6 +228,7 @@ app.post('/api/admin/shipments', async (req, res) => {
       return res.status(400).json({ error: error.message });
     }
 
+    console.log('✅ Shipment created:', shipmentData.tracking_id);
     res.status(201).json({ 
       success: true, 
       message: 'Shipment created successfully!',
@@ -213,13 +240,14 @@ app.post('/api/admin/shipments', async (req, res) => {
   }
 });
 
-// UPDATE a shipment
+// UPDATE a shipment (admin)
 app.put('/api/admin/shipments/:trackingId', async (req, res) => {
   try {
     const { trackingId } = req.params;
     const updates = req.body;
     
-    // Check if shipment exists
+    console.log('📦 Updating shipment:', trackingId);
+    
     const { data: existing, error: checkError } = await supabaseAdmin
       .from('shipments')
       .select('tracking_id')
@@ -230,17 +258,12 @@ app.put('/api/admin/shipments/:trackingId', async (req, res) => {
       return res.status(404).json({ error: 'Shipment not found' });
     }
 
-    // Remove fields that shouldn't be updated
     delete updates.tracking_id;
     delete updates.created_at;
 
-    // Update the shipment
     const { data, error } = await supabaseAdmin
       .from('shipments')
-      .update({
-        ...updates,
-        updated_at: new Date().toISOString()
-      })
+      .update(updates)
       .eq('tracking_id', trackingId)
       .select();
 
@@ -249,6 +272,7 @@ app.put('/api/admin/shipments/:trackingId', async (req, res) => {
       return res.status(400).json({ error: error.message });
     }
 
+    console.log('✅ Shipment updated:', trackingId);
     res.json({ 
       success: true, 
       message: 'Shipment updated successfully!',
@@ -260,12 +284,13 @@ app.put('/api/admin/shipments/:trackingId', async (req, res) => {
   }
 });
 
-// DELETE a shipment
+// DELETE a shipment (admin)
 app.delete('/api/admin/shipments/:trackingId', async (req, res) => {
   try {
     const { trackingId } = req.params;
     
-    // Check if shipment exists
+    console.log('🗑️ Deleting shipment:', trackingId);
+    
     const { data: existing, error: checkError } = await supabaseAdmin
       .from('shipments')
       .select('tracking_id')
@@ -286,6 +311,7 @@ app.delete('/api/admin/shipments/:trackingId', async (req, res) => {
       return res.status(400).json({ error: error.message });
     }
 
+    console.log('✅ Shipment deleted:', trackingId);
     res.json({ 
       success: true, 
       message: `Shipment ${trackingId} deleted successfully!`
@@ -296,11 +322,11 @@ app.delete('/api/admin/shipments/:trackingId', async (req, res) => {
   }
 });
 
-// ---------- SUPPORT MESSAGE MANAGEMENT ----------
-
 // GET all support messages (admin)
 app.get('/api/admin/support', async (req, res) => {
   try {
+    console.log('📩 Fetching support messages (admin)');
+    
     const { data, error } = await supabaseAdmin
       .from('support_messages')
       .select('*')
@@ -308,9 +334,10 @@ app.get('/api/admin/support', async (req, res) => {
 
     if (error) {
       console.error('Supabase error:', error);
-      return res.status(500).json({ error: 'Failed to fetch messages' });
+      return res.status(500).json({ error: error.message });
     }
 
+    console.log('✅ Support messages loaded:', data ? data.length : 0);
     res.json(data || []);
   } catch (err) {
     console.error('Server error:', err);
@@ -324,11 +351,12 @@ app.put('/api/admin/support/:id', async (req, res) => {
     const { id } = req.params;
     const { reply } = req.body;
     
+    console.log('💬 Replying to support message:', id);
+    
     if (!reply || reply.trim() === '') {
       return res.status(400).json({ error: 'Reply message is required' });
     }
 
-    // Check if message exists
     const { data: existing, error: checkError } = await supabaseAdmin
       .from('support_messages')
       .select('id')
@@ -343,8 +371,7 @@ app.put('/api/admin/support/:id', async (req, res) => {
       .from('support_messages')
       .update({ 
         reply: reply.trim(), 
-        read: true,
-        updated_at: new Date().toISOString()
+        read: true
       })
       .eq('id', id)
       .select();
@@ -354,6 +381,7 @@ app.put('/api/admin/support/:id', async (req, res) => {
       return res.status(400).json({ error: error.message });
     }
 
+    console.log('✅ Reply sent to message:', id);
     res.json({ 
       success: true, 
       message: 'Reply sent successfully!',
@@ -370,7 +398,8 @@ app.delete('/api/admin/support/:id', async (req, res) => {
   try {
     const { id } = req.params;
     
-    // Check if message exists
+    console.log('🗑️ Deleting support message:', id);
+    
     const { data: existing, error: checkError } = await supabaseAdmin
       .from('support_messages')
       .select('id')
@@ -391,6 +420,7 @@ app.delete('/api/admin/support/:id', async (req, res) => {
       return res.status(400).json({ error: error.message });
     }
 
+    console.log('✅ Support message deleted:', id);
     res.json({ 
       success: true, 
       message: 'Message deleted successfully!'
@@ -399,6 +429,22 @@ app.delete('/api/admin/support/:id', async (req, res) => {
     console.error('Server error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
+});
+
+// ============================================================
+// CATCH-ALL 404 ROUTE
+// ============================================================
+app.use((req, res) => {
+  res.status(404).json({ 
+    error: 'Route not found',
+    path: req.path,
+    available: {
+      health: '/api/health',
+      shipments: '/api/shipments/:trackingId',
+      admin: '/api/admin/shipments',
+      support: '/api/support'
+    }
+  });
 });
 
 // ============================================================
@@ -413,9 +459,9 @@ app.use((err, req, res, next) => {
 // START SERVER
 // ============================================================
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Nexora Shipping API running on port ${PORT}`);
   console.log(`📦 API URL: http://localhost:${PORT}/api`);
-  console.log(`🔒 Admin routes protected with service role key`);
   console.log(`✅ Ready to accept requests`);
+  console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
 });
